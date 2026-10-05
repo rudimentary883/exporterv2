@@ -544,9 +544,10 @@ def compute_tab(raw, opts):
             row['rank'] = '-'
 
     def sort_key(row):
-        group = 0 if row['core'] else (1 if row['total_feedback'] > 0 else 2)
-        avg = row['average'] if row['average'] is not None else -1
-        return (group, -avg, row['name'].lower())
+        # Default order: largest -> smallest "Average (number of Feedback)".
+        # Adjudication core (CAP) are NOT pinned to the top; they sit wherever their average puts them.
+        avg = row['average'] if row['average'] is not None else float('-inf')
+        return (-avg, row['name'].lower())
     rows.sort(key=sort_key)
 
     if stats['unknown_role']:
@@ -721,6 +722,14 @@ def build_workbook(tab, opts):
             c.font, c.alignment, c.border = bold_font, center, box
         ws.row_dimensions[row_idx].height = 18
         row_idx += 1
+
+    # Filter / sort buttons on the header row (row 5). Use the dropdown on
+    # "Average (number of Rounds)" or "Average (number of Feedback)" to sort
+    # largest -> smallest or smallest -> largest. Rows move together, and the
+    # formulas only reference their own row, so they stay correct after sorting.
+    last_data_row = row_idx - 1
+    if last_data_row >= 6:
+        ws.auto_filter.ref = f"A5:{get_column_letter(last_col)}{last_data_row}"
 
     # Column widths
     widths = {1: 11, 2: 30, 3: 14, 4: 10}
