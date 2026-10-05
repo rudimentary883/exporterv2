@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Adjudicator Tab - Tabbycat Exporter</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+            line-height: 1.6;
+        }
+        h1 { color: #333; margin-bottom: 4px; }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .card h2 {
+            margin-top: 0;
+            font-size: 18px;
+            color: #444;
+            border-bottom: 2px solid #e0e0e0;
+            padding-bottom: 10px;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 15px;
+            margin: 15px 0;
+        }
+        .stat-box { background: #f8f9fa; border-radius: 6px; padding: 15px; text-align: center; }
+        .stat-number { font-size: 28px; font-weight: bold; color: #4a90d9; }
+        .stat-label { font-size: 12px; color: #666; text-transform: uppercase; }
+        .btn {
+            display: inline-block;
+            background: #4a90d9;
+            color: white;
+            text-decoration: none;
+            padding: 12px 22px;
+            border-radius: 6px;
+            font-size: 15px;
+            font-weight: 600;
+        }
+        .btn:hover { background: #357abd; }
+        .btn-success { background: #28a745; }
+        .btn-success:hover { background: #218838; }
+        .btn-outline { background: white; color: #4a90d9; border: 1px solid #4a90d9; }
+        .warn {
+            background: #fff3cd; color: #856404; padding: 12px 12px 12px 30px;
+            border-radius: 6px; font-size: 13px; margin-bottom: 15px;
+        }
+        .warn li { margin: 4px 0; }
+        .table-wrap { overflow-x: auto; }
+        table { border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+        th, td { border: 1px solid #222; padding: 5px 8px; text-align: center; }
+        th { background: #f1f1f1; font-weight: 700; }
+        td.name { text-align: left; }
+        td.score { color: #fff; font-weight: 700; }
+        .chip { color: white; font-weight: 600; font-size: 12px; padding: 3px 10px; border-radius: 4px; margin-right: 6px; }
+    </style>
+</head>
+<body>
+    <h1>Adjudicator Tab Ready</h1>
+    <p style="color:#666;margin-top:0;">{{ tab.tournament_name }}</p>
+
+    <div class="card">
+        <h2>Download</h2>
+        <a href="/download/{{ download_id }}" class="btn btn-success">⬇ Download Excel (.xlsx)</a>
+        <p style="font-size:12px;color:#888;">The file is kept in memory for a short time. If the link expires, just run the export again.</p>
+
+        <div class="stats">
+            <div class="stat-box"><div class="stat-number">{{ tab.rows|length }}</div><div class="stat-label">Adjudicators</div></div>
+            <div class="stat-box"><div class="stat-number">{{ tab.rounds|length }}</div><div class="stat-label">Rounds</div></div>
+            <div class="stat-box"><div class="stat-number">{{ tab.stats.feedback_used }}</div><div class="stat-label">Feedback counted</div></div>
+            <div class="stat-box"><div class="stat-number">{{ tab.stats.feedback_total }}</div><div class="stat-label">Feedback fetched</div></div>
+        </div>
+
+        <p style="font-size:12px;color:#666;">
+            Skipped: {{ tab.stats.discarded }} discarded, {{ tab.stats.ignored }} ignored,
+            {{ tab.stats.trainee_source }} written by trainees, {{ tab.stats.outside_rounds }} outside the selected rounds.
+        </p>
+
+        {% if tab.warnings %}
+        <ul class="warn">
+            {% for w in tab.warnings %}<li>{{ w }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2>Preview (first {{ preview_rows|length }} rows)</h2>
+        <p>
+            <span class="chip" style="background:#{{ role_colors.chair }};">Chair</span>
+            <span class="chip" style="background:#{{ role_colors.panellist }};">Panellist</span>
+            <span class="chip" style="background:#{{ role_colors.trainee }};">Trainee</span>
+            <span class="chip" style="background:#{{ gray }};">No feedback</span>
+        </p>
+        <div class="table-wrap">
+            <table>
+                <tr>
+                    <th rowspan="2">Final Rank</th><th rowspan="2">Name</th><th rowspan="2">Institution</th>
+                    <th rowspan="2">Breaking</th>
+                    {% if include_test %}<th rowspan="2">Judge Test Score</th>{% endif %}
+                    {% for r in tab.rounds %}<th colspan="2">{{ r.name }}</th>{% endfor %}
+                    <th rowspan="2">Average</th><th rowspan="2">Total Feedback</th>
+                </tr>
+                <tr>
+                    {% for r in tab.rounds %}<th>Avg</th><th>No.</th>{% endfor %}
+                </tr>
+                {% for row in preview_rows %}
+                <tr>
+                    <td><strong>{{ row.rank }}</strong></td>
+                    <td class="name">{{ row.name }}</td>
+                    <td>{{ row.institution }}</td>
+                    <td>{{ '☑' if row.breaking else '☐' }}</td>
+                    {% if include_test %}<td><strong>{{ '%.2f'|format(row.test_score) if row.test_score is not none else '' }}</strong></td>{% endif %}
+                    {% for c in row.cells %}
+                        {% if c.avg is not none %}
+                            {% set color = role_colors.get(c.role) %}
+                            <td class="score" style="background:{{ '#' ~ color if color else '#fff' }};{% if not color %}color:#000;{% endif %}">{{ '%.2f'|format(c.avg) }}</td>
+                            <td>{{ c.count }}</td>
+                        {% else %}
+                            <td style="background:#{{ gray }};"></td><td style="background:#{{ gray }};"></td>
+                        {% endif %}
+                    {% endfor %}
+                    <td><strong>{{ '%.3f'|format(row.average) if row.average is not none else '' }}</strong></td>
+                    <td><strong>{{ row.total_feedback if row.total_feedback else '-' }}</strong></td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
+    </div>
+
+    <div style="text-align:center;margin:30px 0;">
+        <a href="/" class="btn btn-outline">← Back to Exporter</a>
+    </div>
+</body>
+</html>

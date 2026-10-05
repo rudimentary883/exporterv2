@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tabbycat Adjudicator Tab Exporter</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+            line-height: 1.6;
+        }
+        h1 { color: #333; margin-bottom: 5px; }
+        .subtitle { color: #666; font-size: 14px; margin-bottom: 25px; }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .card h2 {
+            margin-top: 0;
+            font-size: 18px;
+            color: #444;
+            border-bottom: 2px solid #e0e0e0;
+            padding-bottom: 10px;
+        }
+        label {
+            display: block;
+            font-weight: 600;
+            margin: 15px 0 5px;
+            color: #444;
+        }
+        input[type="text"], input[type="password"], input[type="url"], select {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        .check {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            font-weight: normal;
+            margin: 10px 0 0;
+            cursor: pointer;
+        }
+        .check input { margin-top: 5px; }
+        .hint { font-size: 12px; color: #888; margin-top: 3px; }
+        .btn {
+            background: #4a90d9;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 15px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .btn:hover { background: #357abd; }
+        .btn-secondary { background: #6c757d; padding: 8px 16px; font-size: 13px; }
+        .btn-secondary:hover { background: #545b62; }
+        .btn-success { background: #28a745; }
+        .btn-success:hover { background: #218838; }
+        .test-result {
+            margin-top: 10px;
+            padding: 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            display: none;
+        }
+        .test-result.ok { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .test-result.fail { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .test-result.info { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+        .flash { padding: 12px 16px; border-radius: 6px; margin-bottom: 10px; }
+        .flash.error { background: #f8d7da; color: #721c24; }
+        .flash.info { background: #d1ecf1; color: #0c5460; }
+        .collapsible {
+            cursor: pointer;
+            padding: 10px;
+            background: #e9ecef;
+            border-radius: 4px;
+            margin-top: 10px;
+            font-size: 13px;
+        }
+        .collapsible-content {
+            display: none;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 0 0 4px 4px;
+            font-size: 12px;
+        }
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        @media (max-width: 600px) { .two-col { grid-template-columns: 1fr; } }
+        .legend { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+        .chip { color: white; font-weight: 600; font-size: 12px; padding: 4px 12px; border-radius: 4px; }
+        pre {
+            background: #272822; color: #f8f8f2; padding: 12px; border-radius: 6px;
+            font-size: 12px; overflow-x: auto; max-height: 320px; white-space: pre-wrap; word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <h1>Tabbycat Adjudicator Tab Exporter <span style="font-size:14px;color:#888;">v1.0</span></h1>
+    <p class="subtitle">Export a judge tab (average score + number of feedback per round) from Tabbycat to Excel</p>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <form action="/export" method="POST">
+        <div class="card">
+            <h2>1. Tabbycat API Settings</h2>
+
+            <div class="two-col">
+                <div>
+                    <label for="api_url">Tabbycat URL</label>
+                    <input type="url" name="api_url" id="api_url" placeholder="https://yourtournament.calicotab.com" required>
+                    <p class="hint">Your full Tabbycat site URL (no trailing slash)</p>
+                </div>
+                <div>
+                    <label for="tournament_slug">Tournament Slug</label>
+                    <input type="text" name="tournament_slug" id="tournament_slug" placeholder="thanepreabp2026" required>
+                    <p class="hint">The part after the slash in your tournament URL</p>
+                </div>
+            </div>
+
+            <label for="api_token">API Token (admin account)</label>
+            <input type="text" name="api_token" id="api_token" placeholder="abc123def456...">
+            <p class="hint">
+                Feedback and pairings are not public, so the token must belong to an admin / adjudication-core / tab account.
+                Found on that account's "Change Password" page.
+            </p>
+
+            <div class="collapsible" onclick="toggleAdvanced()">
+                ▼ Advanced: Session Auth Fallback (optional)
+            </div>
+            <div class="collapsible-content" id="advanced_content">
+                <p class="hint" style="margin-bottom:10px;">
+                    If your token keeps failing (especially on Calico-hosted sites), provide your admin username and password.
+                    The exporter tries the token first, then logs in via Django session. Nothing is ever written to Tabbycat.
+                </p>
+                <div class="two-col">
+                    <div>
+                        <label>Admin Username</label>
+                        <input type="text" name="api_username" id="api_username" placeholder="your_username">
+                    </div>
+                    <div>
+                        <label>Admin Password</label>
+                        <input type="password" name="api_password" id="api_password" placeholder="your_password">
+                    </div>
+                </div>
+            </div>
+
+            <div style="margin-top:15px;">
+                <button type="button" class="btn btn-secondary" onclick="testConnection()">Test Connection</button>
+                <button type="button" class="btn btn-secondary" style="margin-left:8px;" onclick="inspectApi()">Inspect API Data</button>
+            </div>
+            <div id="test_result" class="test-result"></div>
+            <div id="inspect_result" class="test-result info"></div>
+        </div>
+
+        <div class="card">
+            <h2>2. Tab Options</h2>
+
+            <label for="rounds">Rounds to include (optional)</label>
+            <input type="text" name="rounds" id="rounds" placeholder="e.g. 1-4  or  1-3,5">
+            <p class="hint">Leave blank to include every preliminary round that has feedback.</p>
+
+            <label class="check">
+                <input type="checkbox" name="include_break_rounds">
+                <span>Also include break (elimination) rounds when the field above is blank</span>
+            </label>
+
+            <label for="institution_display">Institution column shows</label>
+            <select name="institution_display" id="institution_display">
+                <option value="code" selected>Short code (e.g. UPC, NUS)</option>
+                <option value="name">Full institution name</option>
+            </select>
+
+            <label class="check">
+                <input type="checkbox" name="include_test_score" checked>
+                <span>Include the "Judge Test Score" column (the adjudicator's base score)</span>
+            </label>
+
+            <label class="check">
+                <input type="checkbox" name="hide_empty">
+                <span>Hide adjudicators who have received no feedback (adjudication core are always kept)</span>
+            </label>
+
+            <p class="hint" style="margin-top:15px;">Cell colour = role in that round:</p>
+            <div class="legend">
+                <span class="chip" style="background:#b10095;">Chair</span>
+                <span class="chip" style="background:#36b6c1;">Panellist</span>
+                <span class="chip" style="background:#e96e20;">Trainee</span>
+                <span class="chip" style="background:#b7b7b7;">No feedback</span>
+            </div>
+        </div>
+
+        <div class="card" style="text-align:center;">
+            <button type="submit" class="btn btn-success" style="font-size:16px;padding:14px 32px;">
+                📊 Build Adjudicator Tab
+            </button>
+            <p class="hint">Read-only: this tool only reads from Tabbycat and never changes your tab site.</p>
+        </div>
+    </form>
+
+    <script>
+        function toggleAdvanced() {
+            const el = document.getElementById('advanced_content');
+            el.style.display = el.style.display === 'block' ? 'none' : 'block';
+        }
+
+        function payload() {
+            return {
+                base_url: document.getElementById('api_url').value,
+                token: document.getElementById('api_token').value,
+                slug: document.getElementById('tournament_slug').value,
+                username: document.getElementById('api_username').value,
+                password: document.getElementById('api_password').value
+            };
+        }
+
+        function escapeHtml(s) {
+            return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+        }
+
+        async function testConnection() {
+            const resultDiv = document.getElementById('test_result');
+            document.getElementById('inspect_result').style.display = 'none';
+            resultDiv.style.display = 'block';
+            resultDiv.className = 'test-result info';
+            resultDiv.textContent = 'Testing connection...';
+            try {
+                const resp = await fetch('/test-connection', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload())
+                });
+                const data = await resp.json();
+                let html = data.ok
+                    ? `<strong>✅ ${escapeHtml(data.suggestion)}</strong><br><small>Auth method: ${escapeHtml(data.auth_method || 'none')}</small>`
+                    : `<strong>❌ ${escapeHtml(data.suggestion)}</strong>`;
+                if (data.steps && data.steps.length) {
+                    html += '<ul>';
+                    for (const s of data.steps) {
+                        const count = (s.count !== undefined && s.count !== null) ? ` (${s.count} records)` : '';
+                        html += `<li>${escapeHtml(s.step)}: HTTP ${s.status} ${s.ok ? '✓' : '✗'}${count}</li>`;
+                    }
+                    html += '</ul>';
+                }
+                resultDiv.className = 'test-result ' + (data.ok ? 'ok' : 'fail');
+                resultDiv.innerHTML = html;
+            } catch (e) {
+                resultDiv.className = 'test-result fail';
+                resultDiv.textContent = 'Network error: ' + e.message;
+            }
+        }
+
+        async function inspectApi() {
+            const out = document.getElementById('inspect_result');
+            document.getElementById('test_result').style.display = 'none';
+            out.style.display = 'block';
+            out.className = 'test-result info';
+            out.textContent = 'Fetching one sample record from each endpoint...';
+            try {
+                const resp = await fetch('/inspect', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload())
+                });
+                const data = await resp.json();
+                out.innerHTML = '<strong>🔍 Raw API samples</strong> (first record of each list)<pre>' +
+                    escapeHtml(JSON.stringify(data, null, 2)) + '</pre>';
+            } catch (e) {
+                out.className = 'test-result fail';
+                out.textContent = 'Network error: ' + e.message;
+            }
+        }
+    </script>
+</body>
+</html>
