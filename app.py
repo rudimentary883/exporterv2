@@ -48,7 +48,14 @@ ROLE_LABELS = {'chair': 'Chair', 'panellist': 'Panellist', 'trainee': 'Trainee'}
 GRAY = 'B7B7B7'            # no feedback / not allocated that round
 TITLE_FILL = '0B3C5D'      # banner behind the title
 SCORE_FMT = '0.00'         # per-round scores and test score: always 2 decimals
-AVG_FMT = '0.000'          # overall average (3 decimals, as in your sheets)
+AVG_FMT = '0.000'          # overall averages (3 decimals, as in your sheets)
+TOTAL_FMT = '0;-0;"-"'    # total feedback: shows "-" when it is 0
+
+def solid(hex_color):
+    """Solid fill with an explicit, fully-opaque colour (renders the same in Excel and Google Sheets)."""
+    argb = 'FF' + hex_color.upper().lstrip('#')
+    return PatternFill(fill_type='solid', start_color=argb, end_color=argb, fgColor=argb, bgColor=argb)
+
 
 # Finished exports waiting to be downloaded (single gunicorn worker -> in-memory is fine)
 EXPORT_CACHE = OrderedDict()
@@ -501,6 +508,8 @@ def compute_tab(raw, opts):
 
         base = to_float(adj.get('base_score'))
         overall = (total_sum / total_count) if total_count else base
+        round_avgs = [c['avg'] for c in cells if c['avg'] is not None]
+        round_average = (sum(round_avgs) / len(round_avgs)) if round_avgs else base
 
         rows.append({
             'id': adj_id,
@@ -511,6 +520,7 @@ def compute_tab(raw, opts):
             'test_score': base,
             'cells': cells,
             'average': overall,
+            'round_average': round_average,
             'total_feedback': total_count,
             'rank': None,
         })
@@ -578,7 +588,8 @@ def build_workbook(tab, opts):
     fixed = ['Final Rank', 'Name', 'Institution', 'Breaking'] + (['Judge Test Score'] if include_test else [])
     n_fixed = len(fixed)
     first_round_col = n_fixed + 1
-    avg_col = first_round_col + 2 * len(rounds)
+    avg_rounds_col = first_round_col + 2 * len(rounds)   # average of the per-round averages
+    avg_col = avg_rounds_col + 1                          # average weighted by number of feedback
     total_col = avg_col + 1
     last_col = total_col
 
@@ -586,7 +597,7 @@ def build_workbook(tab, opts):
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
     title = ws.cell(row=1, column=1, value=f"{tab['tournament_name']} Adjudicator Tab : Final Tab")
     title.font = Font(name='Arial', size=18, bold=True, color='FFFFFF')
-    title.fill = PatternFill('solid', fgColor=TITLE_FILL)
+    title.fill = solid(TITLE_FILL)
     title.alignment = Alignment(horizontal='left', vertical='center', indent=1)
     ws.row_dimensions[1].height = 42
 
@@ -597,7 +608,7 @@ def build_workbook(tab, opts):
     ws.cell(row=2, column=1).alignment = Alignment(horizontal='right', vertical='center')
     for i, (label, color) in enumerate(legend):
         cell = ws.cell(row=2, column=2 + i, value=label)
-        cell.fill = PatternFill('solid', fgColor=color)
+        cell.fill = solid(color)
         cell.font = Font(name='Arial', size=9, bold=True, color='FFFFFF')
         cell.alignment = center
         cell.border = box
@@ -621,7 +632,9 @@ def build_workbook(tab, opts):
         for offset, label in enumerate(('Average Score', 'No. of Feedback')):
             sub = ws.cell(row=5, column=c + offset, value=label)
             sub.font, sub.alignment, sub.border = Font(name='Arial', size=9, bold=True), center, box
-    for col, label in ((avg_col, 'Average'), (total_col, 'Total Number of Feedback')):
+    for col, label in ((avg_rounds_col, 'Average (number of Rounds)'),
+                       (avg_col, 'Average (number of Feedback)'),
+                       (total_col, 'Total Number of Feedback')):
         ws.merge_cells(start_row=4, start_column=col, end_row=5, end_column=col)
         cell = ws.cell(row=4, column=col, value=label)
         cell.font, cell.alignment = head_font, center
@@ -665,23 +678,47 @@ def build_workbook(tab, opts):
                 count_cell.number_format = '0'
                 color = ROLE_COLORS.get(cell_data['role'])
                 if color:
-                    score_cell.fill = PatternFill('solid', fgColor=color)
+                    score_cell.fill = solid(color)
                     score_cell.font = white_bold
                 else:
                     score_cell.font = bold_font
                 count_cell.font = body_font
             else:
                 for c in (score_cell, count_cell):
-                    c.fill = PatternFill('solid', fgColor=GRAY)
+                    c.fill = solid(GRAY)
             for c in (score_cell, count_cell):
                 c.alignment, c.border = center, box
             col += 2
 
-        avg_cell = ws.cell(row=row_idx, column=avg_col, value=row['average'])
+        # ---- live formulas (so the numbers can be checked cell by cell) ----
+        score_refs = [f"{get_column_letter(first_round_col + 2 * i)}{row_idx}" for i in range(len(rounds))]
+        count_refs = [f"{get_column_letter(first_round_col + 2 * i + 1)}{row_idx}" for i in range(len(rounds))]
+        total_ref = f"{get_column_letter(total_col)}{row_idx}"
+        if include_test:
+            test_ref = f"{get_column_letter(first_round_col - 1)}{row_idx}"
+            fallback = f'IF({test_ref}="","",{test_ref})'      # no feedback yet -> show test score
+        else:
+            fallback = '""'
+
+        if rounds:
+            # Total Number of Feedback = sum of the per-round counts
+            total_formula = "=SUM(" + ",".join(count_refs) + ")"
+            # Average (number of Rounds) = plain average of the per-round averages
+            avg_rounds_formula = f"=IFERROR(AVERAGE({','.join(score_refs)}),{fallback})"
+            # Average (number of Feedback) = sum(score x count) / total feedback
+            products = "+".join(f"N({s_})*N({c_})" for s_, c_ in zip(score_refs, count_refs))
+            avg_formula = f"=IF({total_ref}=0,{fallback},({products})/{total_ref})"
+        else:
+            total_formula, avg_rounds_formula, avg_formula = 0, '', ''
+
+        avg_rounds_cell = ws.cell(row=row_idx, column=avg_rounds_col, value=avg_rounds_formula)
+        avg_rounds_cell.number_format = AVG_FMT
+        avg_cell = ws.cell(row=row_idx, column=avg_col, value=avg_formula)
         avg_cell.number_format = AVG_FMT
-        avg_cell.font, avg_cell.alignment, avg_cell.border = bold_font, center, box
-        total = ws.cell(row=row_idx, column=total_col, value=row['total_feedback'] if row['total_feedback'] else '-')
-        total.font, total.alignment, total.border = bold_font, center, box
+        total = ws.cell(row=row_idx, column=total_col, value=total_formula)
+        total.number_format = TOTAL_FMT
+        for c in (avg_rounds_cell, avg_cell, total):
+            c.font, c.alignment, c.border = bold_font, center, box
         ws.row_dimensions[row_idx].height = 18
         row_idx += 1
 
@@ -694,7 +731,8 @@ def build_workbook(tab, opts):
     for i in range(len(rounds)):
         ws.column_dimensions[get_column_letter(first_round_col + 2 * i)].width = 12
         ws.column_dimensions[get_column_letter(first_round_col + 2 * i + 1)].width = 12
-    ws.column_dimensions[get_column_letter(avg_col)].width = 11
+    ws.column_dimensions[get_column_letter(avg_rounds_col)].width = 15
+    ws.column_dimensions[get_column_letter(avg_col)].width = 15
     ws.column_dimensions[get_column_letter(total_col)].width = 14
 
     ws.freeze_panes = 'C6'
