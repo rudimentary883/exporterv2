@@ -109,7 +109,7 @@
                     <th rowspan="2">Breaking</th>
                     {% if include_test %}<th rowspan="2">Judge Test Score</th>{% endif %}
                     {% for r in tab.rounds %}<th colspan="2">{{ r.name }}</th>{% endfor %}
-                    <th rowspan="2">Average</th><th rowspan="2">Total Feedback</th>
+                    <th rowspan="2">Average (number of Rounds)</th><th rowspan="2">Average (number of Feedback)</th><th rowspan="2">Total Feedback</th>
                 </tr>
                 <tr>
                     {% for r in tab.rounds %}<th>Avg</th><th>No.</th>{% endfor %}
@@ -130,6 +130,7 @@
                             <td style="background:#{{ gray }};"></td><td style="background:#{{ gray }};"></td>
                         {% endif %}
                     {% endfor %}
+                    <td><strong>{{ '%.3f'|format(row.round_average) if row.round_average is not none else '' }}</strong></td>
                     <td><strong>{{ '%.3f'|format(row.average) if row.average is not none else '' }}</strong></td>
                     <td><strong>{{ row.total_feedback if row.total_feedback else '-' }}</strong></td>
                 </tr>
