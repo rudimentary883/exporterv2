@@ -763,17 +763,17 @@ def build_workbook(tab, opts):
         ws.auto_filter.ref = f"A5:{get_column_letter(last_col)}{last_data_row}"
 
     # Column widths
-    widths = {1: 11, 2: 30, 3: 14, 4: 10}
+    widths = {1: 9, 2: 25.1, 3: 14.1, 4: 9.5}
     if include_test:
-        widths[5] = 13
+        widths[5] = 11
     for c, w in widths.items():
         ws.column_dimensions[get_column_letter(c)].width = w
     for i in range(len(rounds)):
-        ws.column_dimensions[get_column_letter(first_round_col + 2 * i)].width = 12
-        ws.column_dimensions[get_column_letter(first_round_col + 2 * i + 1)].width = 12
-    ws.column_dimensions[get_column_letter(avg_rounds_col)].width = 15
-    ws.column_dimensions[get_column_letter(avg_col)].width = 15
-    ws.column_dimensions[get_column_letter(total_col)].width = 14
+        ws.column_dimensions[get_column_letter(first_round_col + 2 * i)].width = 10.5
+        ws.column_dimensions[get_column_letter(first_round_col + 2 * i + 1)].width = 10.5
+    ws.column_dimensions[get_column_letter(avg_rounds_col)].width = 13
+    ws.column_dimensions[get_column_letter(avg_col)].width = 13
+    ws.column_dimensions[get_column_letter(total_col)].width = 12
 
     ws.freeze_panes = 'C6'
     ws.page_setup.orientation = 'landscape'
@@ -978,7 +978,7 @@ def build_reference_workbook(tab, opts):
         ws.column_dimensions[get_column_letter(col)].width = w
     for i in range(n_rounds):
         for k in range(per_round_cols):
-            ws.column_dimensions[get_column_letter(rcol(i, k))].width = 10 if mode == 'rounds' else 9.5
+            ws.column_dimensions[get_column_letter(rcol(i, k))].width = 10 if mode == 'rounds' else 10.5
     for col in range(first_round + per_round_cols * n_rounds, last_col + 1):
         ws.column_dimensions[get_column_letter(col)].width = 13
     if mode == 'feedback':
