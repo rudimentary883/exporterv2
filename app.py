@@ -1,4 +1,14 @@
 """
+Tabbycat Adjudicator Tab Exporter v1.1
+  * v1.1: three export modes (export_mode)
+        combined  = the original sheet (both averages)
+        feedback  = like the Davao sheet: score + number of feedback per round, average weighted by number of feedback
+        rounds    = like the MPDC sheet: one average per round, final average = average of the rounds
+                    (+ the Bali UADC layout with "Average with Min. Score Dropped" / "No. of Rounds Judged" / "Dropped Score"
+                    when the tournament is UADC)
+    Breaking is the 4th column (after Institution) and is written as TRUE/FALSE (Insert > Checkbox turns it into boxes).
+    Per-round averages are stored with 4 decimals (shown with 2); the test score is the exact Base Score from Tabbycat.
+
 Tabbycat Adjudicator Tab Exporter v1.0
 
 Connects to a Tabbycat site through its REST API (same token / session-auth
@@ -47,7 +57,8 @@ ROLE_COLORS = {
 ROLE_LABELS = {'chair': 'Chair', 'panellist': 'Panellist', 'trainee': 'Trainee'}
 GRAY = 'B7B7B7'            # no feedback / not allocated that round
 TITLE_FILL = '0B3C5D'      # banner behind the title
-SCORE_FMT = '0.00'         # per-round scores and test score: always 2 decimals
+SCORE_FMT = '0.00'         # per-round scores: shown with 2 decimals (the cell holds 4)
+TEST_FMT = 'General'       # judge test score = the exact Base Score from Tabbycat, no rounding
 AVG_FMT = '0.000'          # overall averages (3 decimals, as in your sheets)
 TOTAL_FMT = '0;-0;"-"'    # total feedback: shows "-" when it is 0
 
@@ -497,9 +508,9 @@ def compute_tab(raw, opts):
             vals = scores.get((adj_id, seq), [])
             role = roles.get((seq, adj_id))
             if vals:
-                avg = sum(vals) / len(vals)
+                avg = round(sum(vals) / len(vals), 4)      # the cell holds 4 decimals, the sheet shows 2
                 total_count += len(vals)
-                total_sum += sum(vals)
+                total_sum += avg * len(vals)               # same maths as the sheet's formula
                 if role is None:
                     stats['unknown_role'] += 1
                 cells.append({'avg': avg, 'count': len(vals), 'role': role})
@@ -509,7 +520,14 @@ def compute_tab(raw, opts):
         base = to_float(adj.get('base_score'))
         overall = (total_sum / total_count) if total_count else base
         round_avgs = [c['avg'] for c in cells if c['avg'] is not None]
-        round_average = (sum(round_avgs) / len(round_avgs)) if round_avgs else base
+        # per-round average: the test score counts as one score when asked (as in the MPDC / UADC sheets)
+        pool = ([base] if (opts.get('test_in_average') and opts.get('include_test_score') and base is not None) else []) + round_avgs
+        round_average = (sum(pool) / len(pool)) if pool else base
+        if len(pool) > 1:
+            dropped = min(pool)
+            drop_average = (sum(pool) - dropped) / (len(pool) - 1)
+        else:
+            dropped, drop_average = None, round_average
 
         rows.append({
             'id': adj_id,
@@ -521,6 +539,9 @@ def compute_tab(raw, opts):
             'cells': cells,
             'average': overall,
             'round_average': round_average,
+            'drop_average': drop_average,
+            'dropped': dropped,
+            'rounds_judged': len(round_avgs),
             'total_feedback': total_count,
             'rank': None,
         })
@@ -529,11 +550,17 @@ def compute_tab(raw, opts):
         rows = [r for r in rows if r['total_feedback'] > 0 or r['core']]
 
     # Ranking: core = CAP, everybody else with feedback ranked by average (ties share a rank)
-    ranked = sorted([r for r in rows if not r['core'] and r['total_feedback'] > 0],
-                    key=lambda r: (-round(r['average'], 3), r['name'].lower()))
+    def metric(row):
+        # the number the tab is ranked and sorted by
+        if opts.get('export_mode') == 'rounds':
+            return row['drop_average'] if opts.get('uadc') else row['round_average']
+        return row['average']
+
+    ranked = sorted([r for r in rows if not r['core'] and r['total_feedback'] > 0 and metric(r) is not None],
+                    key=lambda r: (-round(metric(r), 3), r['name'].lower()))
     last_key, last_rank = None, 0
     for position, row in enumerate(ranked, start=1):
-        key = round(row['average'], 3)
+        key = round(metric(row), 3)
         if key != last_key:
             last_rank, last_key = position, key
         row['rank'] = last_rank
@@ -546,9 +573,11 @@ def compute_tab(raw, opts):
     def sort_key(row):
         # Default order: largest -> smallest "Average (number of Feedback)".
         # Adjudication core (CAP) are NOT pinned to the top; they sit wherever their average puts them.
-        avg = row['average'] if row['average'] is not None else float('-inf')
+        avg = metric(row) if metric(row) is not None else float('-inf')
         return (-avg, row['name'].lower())
     rows.sort(key=sort_key)
+    for position, row in enumerate(rows, start=1):
+        row['no'] = position
 
     if stats['unknown_role']:
         warnings.append(f"{stats['unknown_role']} round score(s) had no matching pairing, so they have no "
@@ -560,6 +589,8 @@ def compute_tab(raw, opts):
 
     return {
         'tournament_name': raw['tournament_name'],
+        'mode': opts.get('export_mode', 'combined'),
+        'uadc': bool(opts.get('uadc')),
         'rounds': rounds,
         'rows': rows,
         'stats': stats,
@@ -660,12 +691,12 @@ def build_workbook(tab, opts):
         inst_cell = ws.cell(row=row_idx, column=col, value=row['institution'])
         inst_cell.font, inst_cell.alignment, inst_cell.border = body_font, center, box
         col += 1
-        brk = ws.cell(row=row_idx, column=col, value='☑' if row['breaking'] else '☐')
-        brk.font, brk.alignment, brk.border = Font(name='Segoe UI Symbol', size=11), center, box
+        brk = ws.cell(row=row_idx, column=col, value=bool(row['breaking']))   # TRUE/FALSE -> Insert > Checkbox
+        brk.font, brk.alignment, brk.border = Font(name='Arial', size=10), center, box
         col += 1
         if include_test:
             test = ws.cell(row=row_idx, column=col, value=row['test_score'])
-            test.number_format = SCORE_FMT
+            test.number_format = TEST_FMT
             test.font, test.alignment, test.border = bold_font, center, box
             col += 1
 
@@ -756,6 +787,225 @@ def build_workbook(tab, opts):
     return buffer
 
 
+def build_reference_workbook(tab, opts):
+    """
+    Sheets laid out like the reference files:
+      mode 'feedback'        -> Davao sheet (score + number of feedback per round, weighted average, total, final rank)
+      mode 'rounds'          -> MPDC sheet  (one average per round, final average, rank)
+      mode 'rounds' + UADC   -> Bali sheet  (+ Average with Min. Score Dropped, No. of Rounds Judged, Dropped Score)
+    Breaking is the 4th column; it holds TRUE/FALSE.
+    """
+    mode = tab['mode']
+    uadc = tab['uadc'] and mode == 'rounds'
+    include_test = opts.get('include_test_score', True)
+    in_avg = include_test and opts.get('test_in_average', True)
+    rounds, rows = tab['rounds'], tab['rows']
+    n_rounds = len(rounds)
+    per_round_cols = 2 if mode == 'feedback' else 1
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Final Tab'
+    med = Side(style='medium', color='000000')
+    center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    left = Alignment(horizontal='left', vertical='center', wrap_text=True)
+    arial = Font(name='Arial', size=10)
+    bold = Font(name='Arial', size=10, bold=True)
+    white_bold = Font(name='Arial', size=10, bold=True, color='FFFFFF')
+
+    # ---- column plan (column A is a narrow spacer, the table starts in B) ----
+    c = 2
+    col_no = c; c += 1
+    col_name = c; c += 1
+    col_inst = c; c += 1
+    col_brk = c; c += 1
+    col_test = None
+    if include_test:
+        col_test = c; c += 1
+    first_round = c
+    c += per_round_cols * n_rounds
+    if mode == 'feedback':
+        col_avg, col_total, col_rank = c, c + 1, c + 2
+        last_col = col_rank
+    elif uadc:
+        col_avg, col_drop_avg, col_judged, col_dropped = c, c + 1, c + 2, c + 3
+        last_col = col_dropped
+    else:
+        col_avg, col_rank = c, c + 1
+        last_col = col_rank
+    if uadc:
+        col_rank = col_no                      # Bali layout: "Final Rank" is the first column
+    two_row_header = not uadc
+    head_top = 3 if uadc else 2
+    head_bottom = 3
+    first_data = 4
+    last_data = first_data + len(rows) - 1
+
+    def put(r, col, value=None, font=arial, align=center, fmt=None, fill=None):
+        cell = ws.cell(row=r, column=col, value=value)
+        cell.font, cell.alignment = font, align
+        if fmt:
+            cell.number_format = fmt
+        if fill:
+            cell.fill = solid(fill)
+        return cell
+
+    def rcol(i, k=0):                           # column of round i (k = 1 -> the "No. of Feedback" column)
+        return first_round + per_round_cols * i + k
+
+    # ---- headers ----
+    def fixed_header(col, label):
+        if two_row_header:
+            ws.merge_cells(start_row=head_top, start_column=col, end_row=head_bottom, end_column=col)
+        put(head_top, col, label, bold)
+
+    fixed_header(col_no, 'Final Rank' if uadc else 'No.')
+    fixed_header(col_name, 'Name')
+    fixed_header(col_inst, 'Institution')
+    fixed_header(col_brk, 'Breaking')
+    if include_test:
+        fixed_header(col_test, 'Judge Test Score')
+    if mode == 'feedback':
+        for i, rnd in enumerate(rounds):
+            ws.merge_cells(start_row=2, start_column=rcol(i), end_row=2, end_column=rcol(i, 1))
+            put(2, rcol(i), rnd.get('name') or f"Round {rnd['seq']}", bold)
+            put(3, rcol(i), 'Average Score', arial)
+            put(3, rcol(i, 1), 'No. of Feedback', arial)
+        fixed_header(col_avg, 'Average')
+        fixed_header(col_total, 'Total Number of Feedback')
+        fixed_header(col_rank, 'Final Rank (excluding CAP)')
+    elif uadc:
+        for i, rnd in enumerate(rounds):
+            put(3, rcol(i), rnd.get('name') or f"Round {rnd['seq']}", bold)
+        for col, label in ((col_avg, 'Average'), (col_drop_avg, 'Average with Min. Score Dropped'),
+                           (col_judged, 'No. of Rounds Judged'), (col_dropped, 'Dropped Score')):
+            put(3, col, label, bold)
+    else:
+        if n_rounds:
+            ws.merge_cells(start_row=2, start_column=rcol(0), end_row=2, end_column=rcol(n_rounds - 1))
+            put(2, rcol(0), 'Average Feedback Score', bold)
+        for i, rnd in enumerate(rounds):
+            put(3, rcol(i), rnd.get('name') or f"Round {rnd['seq']}", bold)
+        fixed_header(col_avg, 'Final Average')
+        fixed_header(col_rank, 'Rank')
+
+    # ---- data ----
+    for n, row in enumerate(rows):
+        r = first_data + n
+        rank_font = arial if (mode == 'rounds' and not uadc) else bold
+        put(r, col_no, row['rank'] if uadc else row['no'], bold if uadc else arial)
+        put(r, col_name, row['name'], arial, left)
+        put(r, col_inst, row['institution'], arial)
+        put(r, col_brk, bool(row['breaking']), arial)
+        if include_test:
+            put(r, col_test, row['test_score'], bold, fmt=TEST_FMT)
+        for i, cd in enumerate(row['cells']):
+            sc = ws.cell(row=r, column=rcol(i))
+            sc.alignment = center
+            ct = ws.cell(row=r, column=rcol(i, 1)) if mode == 'feedback' else None
+            if ct is not None:
+                ct.alignment, ct.font = center, arial
+            if cd['avg'] is not None:
+                sc.value = cd['avg']                       # 4 decimals in the cell, 2 shown
+                sc.number_format = SCORE_FMT
+                color = ROLE_COLORS.get(cd['role'])
+                sc.font = white_bold if color else bold
+                if color:
+                    sc.fill = solid(color)
+                if ct is not None:
+                    ct.value, ct.number_format = cd['count'], '0'
+            else:
+                sc.font = white_bold
+                sc.fill = solid(GRAY)
+                if ct is not None:
+                    ct.fill = solid(GRAY)
+
+        L = get_column_letter
+        score_refs = [f"{L(rcol(i))}{r}" for i in range(n_rounds)]
+        if mode == 'feedback':
+            count_refs = [f"{L(rcol(i, 1))}{r}" for i in range(n_rounds)]
+            total_ref = f"{L(col_total)}{r}"
+            fallback = f'IF({L(col_test)}{r}="","",{L(col_test)}{r})' if include_test else '""'
+            if n_rounds:
+                total_f = "=SUM(" + ",".join(count_refs) + ")"
+                products = "+".join(f"N({a})*N({b})" for a, b in zip(score_refs, count_refs))
+                avg_f = f"=IF({total_ref}=0,{fallback},({products})/{total_ref})"
+            else:
+                total_f, avg_f = 0, ''
+            put(r, col_avg, avg_f, bold, fmt=AVG_FMT)
+            put(r, col_total, total_f, arial, fmt=TOTAL_FMT)
+            put(r, col_rank, row['rank'], bold)
+        else:
+            first_val = col_test if in_avg else first_round
+            rng = f"{L(first_val)}{r}:{L(rcol(n_rounds - 1))}{r}" if n_rounds else None
+            fb = f'IF({L(col_test)}{r}="","",{L(col_test)}{r})' if (include_test and not in_avg) else '""'
+            avg_f = f"=IFERROR(AVERAGE({rng}),{fb})" if rng else ''
+            put(r, col_avg, avg_f, bold if not uadc else arial, fmt=AVG_FMT)
+            if uadc:
+                rounds_rng = f"{L(rcol(0))}{r}:{L(rcol(n_rounds - 1))}{r}" if n_rounds else None
+                drop_f = (f"=IF(COUNT({rng})>1,(SUM({rng})-MIN({rng}))/(COUNT({rng})-1),IFERROR(AVERAGE({rng}),\"\"))"
+                          if rng else '')
+                put(r, col_drop_avg, drop_f, bold, fmt=AVG_FMT)
+                put(r, col_judged, f"=COUNT({rounds_rng})" if rounds_rng else 0, arial, fmt='0')
+                put(r, col_dropped, f'=IF(COUNT({rng})>1,MIN({rng}),"")' if rng else '', arial, fmt=SCORE_FMT)
+            else:
+                put(r, col_rank, row['rank'], arial)
+        ws.row_dimensions[r].height = 18
+
+    # ---- medium outline around the header block and the data block (as in the reference sheets) ----
+    def border_for(r, col, top_row, bottom_row):
+        return Border(left=med if col == 2 else None, right=med if col == last_col else None,
+                      top=med if r == top_row else None, bottom=med if r == bottom_row else None)
+    for r in range(head_top, head_bottom + 1):
+        for col in range(2, last_col + 1):
+            ws.cell(row=r, column=col).border = border_for(r, col, head_top, head_bottom)
+    for r in range(first_data, max(last_data, first_data) + 1):
+        for col in range(2, last_col + 1):
+            ws.cell(row=r, column=col).border = border_for(r, col, first_data, last_data)
+
+    # ---- "Judge Allocations" colour key to the right of the table ----
+    key_col = last_col + 2
+    put(head_bottom, key_col, 'Judge Allocations:', bold, Alignment(horizontal='center', vertical='center'))
+    for k, (label, role) in enumerate((('Chair', 'chair'), ('Panelist', 'panellist'), ('Trainee', 'trainee'))):
+        put(first_data + k, key_col, label, white_bold, fill=ROLE_COLORS[role])
+
+    # ---- widths / heights / filter / freeze ----
+    ws.column_dimensions['A'].width = 2
+    widths = {col_no: 10.1 if uadc else 6.4, col_name: 25.1, col_inst: 15.1, col_brk: 9.5}
+    if include_test:
+        widths[col_test] = 11
+    for col, w in widths.items():
+        ws.column_dimensions[get_column_letter(col)].width = w
+    for i in range(n_rounds):
+        for k in range(per_round_cols):
+            ws.column_dimensions[get_column_letter(rcol(i, k))].width = 10 if mode == 'rounds' else 9.5
+    for col in range(first_round + per_round_cols * n_rounds, last_col + 1):
+        ws.column_dimensions[get_column_letter(col)].width = 13
+    if mode == 'feedback':
+        ws.column_dimensions[get_column_letter(col_total)].width = 12
+        ws.column_dimensions[get_column_letter(col_rank)].width = 13
+    if uadc:
+        ws.column_dimensions[get_column_letter(col_drop_avg)].width = 14
+    ws.column_dimensions[get_column_letter(last_col + 1)].width = 2.6
+    ws.column_dimensions[get_column_letter(key_col)].width = 16.4
+    ws.row_dimensions[1].height = 11.25
+    ws.row_dimensions[head_top].height = 23.25 if two_row_header else 40
+    if two_row_header:
+        ws.row_dimensions[head_bottom].height = 27
+    if last_data >= first_data:
+        ws.auto_filter.ref = f"B{head_bottom}:{get_column_letter(last_col)}{last_data}"
+    ws.freeze_panes = f"D{first_data}"
+    ws.page_setup.orientation = 'landscape'
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
 # =============================================================================
 # FLASK ROUTES
 # =============================================================================
@@ -829,13 +1079,20 @@ def export():
         'institution_display': request.form.get('institution_display', 'code'),
         'include_test_score': request.form.get('include_test_score') == 'on',
         'hide_empty': request.form.get('hide_empty') == 'on',
+        'export_mode': request.form.get('export_mode') if request.form.get('export_mode') in ('combined', 'feedback', 'rounds') else 'combined',
+        'test_in_average': request.form.get('test_in_average') == 'on',
+        'uadc_setting': request.form.get('uadc', 'auto'),
     }
 
     try:
         reader = TabbycatReader(base_url, token, slug, username=username, password=password)
         raw = fetch_raw(reader, opts)
+        # UADC columns (Average with Min. Score Dropped, ...) only for the per-round tab of a UADC tournament
+        name_hint = f"{raw.get('tournament_name', '')} {slug}".lower()
+        opts['uadc'] = opts['export_mode'] == 'rounds' and (
+            opts['uadc_setting'] == 'yes' or (opts['uadc_setting'] == 'auto' and 'uadc' in name_hint))
         tab = compute_tab(raw, opts)
-        workbook = build_workbook(tab, opts)
+        workbook = build_workbook(tab, opts) if opts['export_mode'] == 'combined' else build_reference_workbook(tab, opts)
     except ApiError as exc:
         flash(f'API error: {exc.friendly()}', 'error')
         return redirect(url_for('index'))
@@ -847,13 +1104,13 @@ def export():
         return redirect(url_for('index'))
 
     token_id = uuid.uuid4().hex
-    EXPORT_CACHE[token_id] = (f"{slug}_adjudicator_tab.xlsx", workbook.getvalue())
+    EXPORT_CACHE[token_id] = (f"{slug}_adjudicator_tab_{opts['export_mode']}.xlsx", workbook.getvalue())
     while len(EXPORT_CACHE) > MAX_CACHED:
         EXPORT_CACHE.popitem(last=False)
 
     return render_template('results.html', tab=tab, download_id=token_id,
                            role_colors=ROLE_COLORS, gray=GRAY, preview_rows=tab['rows'][:25],
-                           include_test=opts['include_test_score'])
+                           include_test=opts['include_test_score'], mode=opts['export_mode'], uadc=opts['uadc'])
 
 
 @app.route('/download/<download_id>')
