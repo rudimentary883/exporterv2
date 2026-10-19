@@ -68,7 +68,8 @@
 </head>
 <body>
     <h1>Adjudicator Tab Ready</h1>
-    <p style="color:#666;margin-top:0;">{{ tab.tournament_name }}</p>
+    <p style="color:#666;margin-top:0;">{{ tab.tournament_name }} &middot;
+        {% if mode == 'feedback' %}by number of feedback{% elif mode == 'rounds' %}by average per round{% if uadc %} (UADC columns){% endif %}{% else %}both averages{% endif %}</p>
 
     <div class="card">
         <h2>Download</h2>
@@ -105,34 +106,41 @@
         <div class="table-wrap">
             <table>
                 <tr>
-                    <th rowspan="2">Final Rank</th><th rowspan="2">Name</th><th rowspan="2">Institution</th>
+                    <th rowspan="2">{{ 'Final Rank' if (mode == 'combined' or uadc) else 'No.' }}</th><th rowspan="2">Name</th><th rowspan="2">Institution</th>
                     <th rowspan="2">Breaking</th>
                     {% if include_test %}<th rowspan="2">Judge Test Score</th>{% endif %}
-                    {% for r in tab.rounds %}<th colspan="2">{{ r.name }}</th>{% endfor %}
-                    <th rowspan="2">Average (number of Rounds)</th><th rowspan="2">Average (number of Feedback)</th><th rowspan="2">Total Feedback</th>
+                    {% for r in tab.rounds %}<th colspan="{{ 1 if mode == 'rounds' else 2 }}">{{ r.name }}</th>{% endfor %}
+                    {% if mode != 'feedback' %}<th rowspan="2">{{ 'Average' if uadc else ('Final Average' if mode == 'rounds' else 'Average (number of Rounds)') }}</th>{% endif %}
+                    {% if uadc %}<th rowspan="2">Average with Min. Score Dropped</th><th rowspan="2">No. of Rounds Judged</th><th rowspan="2">Dropped Score</th>{% endif %}
+                    {% if mode != 'rounds' %}<th rowspan="2">Average (number of Feedback)</th><th rowspan="2">Total Feedback</th>{% endif %}
+                    {% if mode == 'rounds' and not uadc %}<th rowspan="2">Rank</th>{% endif %}
+                    {% if mode == 'feedback' %}<th rowspan="2">Final Rank</th>{% endif %}
                 </tr>
                 <tr>
-                    {% for r in tab.rounds %}<th>Avg</th><th>No.</th>{% endfor %}
+                    {% for r in tab.rounds %}<th>Avg</th>{% if mode != 'rounds' %}<th>No.</th>{% endif %}{% endfor %}
                 </tr>
                 {% for row in preview_rows %}
                 <tr>
-                    <td><strong>{{ row.rank }}</strong></td>
+                    <td><strong>{{ row.rank if (mode == 'combined' or uadc) else row.no }}</strong></td>
                     <td class="name">{{ row.name }}</td>
                     <td>{{ row.institution }}</td>
-                    <td>{{ '☑' if row.breaking else '☐' }}</td>
-                    {% if include_test %}<td><strong>{{ '%.2f'|format(row.test_score) if row.test_score is not none else '' }}</strong></td>{% endif %}
+                    <td>{{ 'TRUE' if row.breaking else 'FALSE' }}</td>
+                    {% if include_test %}<td><strong>{{ row.test_score if row.test_score is not none else '' }}</strong></td>{% endif %}
                     {% for c in row.cells %}
                         {% if c.avg is not none %}
                             {% set color = role_colors.get(c.role) %}
                             <td class="score" style="background:{{ '#' ~ color if color else '#fff' }};{% if not color %}color:#000;{% endif %}">{{ '%.2f'|format(c.avg) }}</td>
-                            <td>{{ c.count }}</td>
+                            {% if mode != 'rounds' %}<td>{{ c.count }}</td>{% endif %}
                         {% else %}
-                            <td style="background:#{{ gray }};"></td><td style="background:#{{ gray }};"></td>
+                            <td style="background:#{{ gray }};"></td>{% if mode != 'rounds' %}<td style="background:#{{ gray }};"></td>{% endif %}
                         {% endif %}
                     {% endfor %}
-                    <td><strong>{{ '%.3f'|format(row.round_average) if row.round_average is not none else '' }}</strong></td>
-                    <td><strong>{{ '%.3f'|format(row.average) if row.average is not none else '' }}</strong></td>
-                    <td><strong>{{ row.total_feedback if row.total_feedback else '-' }}</strong></td>
+                    {% if mode != 'feedback' %}<td><strong>{{ '%.3f'|format(row.round_average) if row.round_average is not none else '' }}</strong></td>{% endif %}
+                    {% if uadc %}<td><strong>{{ '%.3f'|format(row.drop_average) if row.drop_average is not none else '' }}</strong></td>
+                        <td>{{ row.rounds_judged }}</td><td>{{ row.dropped if row.dropped is not none else '' }}</td>{% endif %}
+                    {% if mode != 'rounds' %}<td><strong>{{ '%.3f'|format(row.average) if row.average is not none else '' }}</strong></td>
+                    <td><strong>{{ row.total_feedback if row.total_feedback else '-' }}</strong></td>{% endif %}
+                    {% if mode in ('feedback', 'rounds') and not uadc %}<td>{{ row.rank }}</td>{% endif %}
                 </tr>
                 {% endfor %}
             </table>
