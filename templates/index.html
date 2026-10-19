@@ -173,6 +173,26 @@
         <div class="card">
             <h2>2. Tab Options</h2>
 
+            <label for="export_mode">Which tab?</label>
+            <select name="export_mode" id="export_mode">
+                <option value="feedback">By number of feedback &mdash; score + number of feedback per round, average weighted by feedback (Davao-style sheet)</option>
+                <option value="rounds">By average per round &mdash; one average per round, final average = average of the rounds (MPDC-style sheet)</option>
+                <option value="combined" selected>Both averages in one sheet (the original export)</option>
+            </select>
+            <p class="hint">Breaking is the 4th column (after Institution) and is written as TRUE/FALSE. In Google Sheets: select the column, then <strong>Insert &rarr; Checkbox</strong> turns the TRUE/FALSE into ticked / empty boxes.</p>
+
+            <label for="uadc">UADC columns (only for &ldquo;By average per round&rdquo;)</label>
+            <select name="uadc" id="uadc">
+                <option value="auto" selected>Automatic &mdash; only if the tournament name or slug contains &ldquo;UADC&rdquo;</option>
+                <option value="yes">Yes &mdash; add Average with Min. Score Dropped, No. of Rounds Judged, Dropped Score</option>
+                <option value="no">No</option>
+            </select>
+
+            <label class="check">
+                <input type="checkbox" name="test_in_average" checked>
+                <span>&ldquo;By average per round&rdquo;: count the Judge Test Score as one of the scores in the average (as in the MPDC and UADC sheets)</span>
+            </label>
+
             <label for="rounds">Rounds to include (optional)</label>
             <input type="text" name="rounds" id="rounds" placeholder="e.g. 1-4  or  1-3,5">
             <p class="hint">Leave blank to include every preliminary round that has feedback.</p>
@@ -190,7 +210,7 @@
 
             <label class="check">
                 <input type="checkbox" name="include_test_score" checked>
-                <span>Include the "Judge Test Score" column (the adjudicator's base score)</span>
+                <span>Include the "Judge Test Score" column (the adjudicator's exact Base Score; the Davao sheet had none)</span>
             </label>
 
             <label class="check">
