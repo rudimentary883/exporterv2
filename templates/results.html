@@ -106,7 +106,7 @@
         <div class="table-wrap">
             <table>
                 <tr>
-                    <th rowspan="2">{{ 'Final Rank' if (mode == 'combined' or uadc) else 'No.' }}</th><th rowspan="2">Name</th><th rowspan="2">Institution</th>
+                    <th rowspan="2">{{ 'Final Rank' if (mode == 'combined' or uadc) else 'No.' }}</th>{% if temp %}<th rowspan="2">Tested (by CAP)</th><th rowspan="2">Chair / Panelist</th>{% endif %}<th rowspan="2">Name</th><th rowspan="2">Institution</th>
                     <th rowspan="2">Breaking</th>
                     {% if include_test %}<th rowspan="2">Judge Test Score</th>{% endif %}
                     {% for r in tab.rounds %}<th colspan="{{ 1 if mode == 'rounds' else 2 }}">{{ r.name }}</th>{% endfor %}
@@ -122,6 +122,7 @@
                 {% for row in preview_rows %}
                 <tr>
                     <td><strong>{{ row.rank if (mode == 'combined' or uadc) else row.no }}</strong></td>
+                    {% if temp %}<td class="name">{{ row.tested_note }}</td><td class="name">{{ row.chair_note }}</td>{% endif %}
                     <td class="name">{{ row.name }}</td>
                     <td>{{ row.institution }}</td>
                     <td>{{ 'TRUE' if row.breaking else 'FALSE' }}</td>
