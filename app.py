@@ -1,4 +1,10 @@
 """
+Tabbycat Adjudicator Tab Exporter v1.2
+  * v1.2: two TEMPORARY columns, to the left of the Name column (delete them before the tab is released):
+        "Tested (by CAP)"   -> "Tested, Round 1" / "Tested, Rounds 2, 3": rounds in which a tester (adjudication core / CAP) gave
+                               the judge counted feedback (= the dark-outlined dots of Tabbycat's feedback graph)
+        "Chair / Panelist"  -> "Chair, Rounds 2, 3" for judges who have chaired; "Panelist only, Rounds 2, 3" for judges who
+                               have judged but never chaired; empty for judges who have not judged yet
 Tabbycat Adjudicator Tab Exporter v1.1
   * v1.1: three export modes (export_mode)
         combined  = the original sheet (both averages)
@@ -425,6 +431,15 @@ def compute_tab(raw, opts):
              'ignored': 0, 'trainee_source': 0, 'no_round': 0, 'no_score': 0,
              'outside_rounds': 0, 'unknown_role': 0}
 
+    # Testers: adjudication core (CAP) are always testers in Tabbycat; a separate "tester" flag is honoured if the API has one
+    tester_ids = set()
+    for a in raw['adjudicators']:
+        if isinstance(a, dict) and (a.get('adj_core') or a.get('tester') or a.get('is_tester')):
+            a_id = a.get('id') if a.get('id') is not None else url_id(a.get('url'), 'adjudicators')
+            if a_id is not None:
+                tester_ids.add(a_id)
+    tested = set()                   # (adj_id, round_seq) the judge was tested in (counted feedback written by a tester)
+
     scores = defaultdict(list)       # (adj_id, round_seq) -> [scores]
     for fb in raw['feedback']:
         if not isinstance(fb, dict):
@@ -466,6 +481,7 @@ def compute_tab(raw, opts):
         # Feedback written by a trainee does not count (Tabbycat rule)
         source = fb.get('source_adjudicator') or fb.get('source')
         src_text = str(source.get('url') if isinstance(source, dict) else source)
+        src_adj = None
         if '/adjudicators/' in src_text:
             src_adj = url_id(source, 'adjudicators')
             if src_adj is not None and debate_id in debates and src_adj in debates[debate_id]['trainees']:
@@ -474,6 +490,8 @@ def compute_tab(raw, opts):
 
         scores[(adj_id, round_seq)].append(score)
         stats['feedback_used'] += 1
+        if src_adj is not None and src_adj in tester_ids:
+            tested.add((adj_id, round_seq))
 
     # Automatic round trimming: drop rounds that have no feedback at all
     if not opts.get('round_filter'):
@@ -483,6 +501,19 @@ def compute_tab(raw, opts):
     else:
         rounds = rounds_all
     round_seqs = [r['seq'] for r in rounds]
+    if not tester_ids:
+        warnings.append('No adjudicator is marked as adjudication core / tester, so the "Tested" column will stay empty.')
+
+    def round_label(seq):
+        name = next((r.get('name') or '' for r in rounds_all if r['seq'] == seq), '')
+        m = re.search(r'(\d+)\s*$', name)
+        return m.group(1) if m else (name or str(seq))
+
+    def rounds_text(prefix, seqs):
+        seqs = sorted(seqs)
+        if not seqs:
+            return ''
+        return f"{prefix}, {'Round' if len(seqs) == 1 else 'Rounds'} " + ', '.join(round_label(x) for x in seqs)
 
     # Rows
     inst_mode = opts.get('institution_display', 'code')
@@ -542,6 +573,9 @@ def compute_tab(raw, opts):
             'drop_average': drop_average,
             'dropped': dropped,
             'rounds_judged': len(round_avgs),
+            'tested_note': rounds_text('Tested', [q for q in round_seqs if (adj_id, q) in tested]),
+            'chair_note': (rounds_text('Chair', [q for q in round_seqs if roles.get((q, adj_id)) == 'chair'])
+                           or rounds_text('Panelist only', [q for q in round_seqs if roles.get((q, adj_id)) == 'panellist'])),
             'total_feedback': total_count,
             'rank': None,
         })
@@ -617,7 +651,9 @@ def build_workbook(tab, opts):
     center = Alignment(horizontal='center', vertical='center', wrap_text=True)
     left = Alignment(horizontal='left', vertical='center', indent=1)
 
-    fixed = ['Final Rank', 'Name', 'Institution', 'Breaking'] + (['Judge Test Score'] if include_test else [])
+    temp = bool(opts.get('temp_columns'))
+    fixed = (['Final Rank'] + (['Tested (by CAP)', 'Chair / Panelist'] if temp else [])
+             + ['Name', 'Institution', 'Breaking'] + (['Judge Test Score'] if include_test else []))
     n_fixed = len(fixed)
     first_round_col = n_fixed + 1
     avg_rounds_col = first_round_col + 2 * len(rounds)   # average of the per-round averages
@@ -685,6 +721,11 @@ def build_workbook(tab, opts):
         rank_cell = ws.cell(row=row_idx, column=col, value=row['rank'])
         rank_cell.font, rank_cell.alignment, rank_cell.border = bold_font, center, box
         col += 1
+        if temp:                                     # temporary notes, left of the name (delete before release)
+            for note in (row['tested_note'], row['chair_note']):
+                note_cell = ws.cell(row=row_idx, column=col, value=note or None)
+                note_cell.font, note_cell.alignment, note_cell.border = body_font, Alignment(horizontal='left', vertical='center', indent=1), box
+                col += 1
         name_cell = ws.cell(row=row_idx, column=col, value=row['name'])
         name_cell.font, name_cell.alignment, name_cell.border = body_font, left, box
         col += 1
@@ -763,11 +804,10 @@ def build_workbook(tab, opts):
         ws.auto_filter.ref = f"A5:{get_column_letter(last_col)}{last_data_row}"
 
     # Column widths
-    widths = {1: 9, 2: 25.1, 3: 14.1, 4: 9.5}
-    if include_test:
-        widths[5] = 11
-    for c, w in widths.items():
-        ws.column_dimensions[get_column_letter(c)].width = w
+    label_width = {'Final Rank': 9, 'Tested (by CAP)': 24, 'Chair / Panelist': 27, 'Name': 25.1, 'Institution': 14.1,
+                   'Breaking': 9.5, 'Judge Test Score': 11}
+    for c, label in enumerate(fixed, start=1):
+        ws.column_dimensions[get_column_letter(c)].width = label_width[label]
     for i in range(len(rounds)):
         ws.column_dimensions[get_column_letter(first_round_col + 2 * i)].width = 10.5
         ws.column_dimensions[get_column_letter(first_round_col + 2 * i + 1)].width = 10.5
@@ -775,7 +815,7 @@ def build_workbook(tab, opts):
     ws.column_dimensions[get_column_letter(avg_col)].width = 13
     ws.column_dimensions[get_column_letter(total_col)].width = 12
 
-    ws.freeze_panes = 'C6'
+    ws.freeze_panes = f"{get_column_letter(fixed.index('Name') + 2)}6"
     ws.page_setup.orientation = 'landscape'
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
@@ -816,6 +856,11 @@ def build_reference_workbook(tab, opts):
     # ---- column plan (column A is a narrow spacer, the table starts in B) ----
     c = 2
     col_no = c; c += 1
+    temp = bool(opts.get('temp_columns'))
+    col_tested = col_chair = None
+    if temp:                                   # temporary notes, left of the name (delete before release)
+        col_tested, col_chair = c, c + 1
+        c += 2
     col_name = c; c += 1
     col_inst = c; c += 1
     col_brk = c; c += 1
@@ -860,6 +905,9 @@ def build_reference_workbook(tab, opts):
         put(head_top, col, label, bold)
 
     fixed_header(col_no, 'Final Rank' if uadc else 'No.')
+    if temp:
+        fixed_header(col_tested, 'Tested (by CAP)')
+        fixed_header(col_chair, 'Chair / Panelist')
     fixed_header(col_name, 'Name')
     fixed_header(col_inst, 'Institution')
     fixed_header(col_brk, 'Breaking')
@@ -894,6 +942,9 @@ def build_reference_workbook(tab, opts):
         r = first_data + n
         rank_font = arial if (mode == 'rounds' and not uadc) else bold
         put(r, col_no, row['rank'] if uadc else row['no'], bold if uadc else arial)
+        if temp:
+            put(r, col_tested, row['tested_note'] or None, arial, left)
+            put(r, col_chair, row['chair_note'] or None, arial, left)
         put(r, col_name, row['name'], arial, left)
         put(r, col_inst, row['institution'], arial)
         put(r, col_brk, bool(row['breaking']), arial)
@@ -972,6 +1023,8 @@ def build_reference_workbook(tab, opts):
     # ---- widths / heights / filter / freeze ----
     ws.column_dimensions['A'].width = 2
     widths = {col_no: 10.1 if uadc else 6.4, col_name: 25.1, col_inst: 15.1, col_brk: 9.5}
+    if temp:
+        widths[col_tested], widths[col_chair] = 24, 27
     if include_test:
         widths[col_test] = 11
     for col, w in widths.items():
@@ -994,7 +1047,7 @@ def build_reference_workbook(tab, opts):
         ws.row_dimensions[head_bottom].height = 27
     if last_data >= first_data:
         ws.auto_filter.ref = f"B{head_bottom}:{get_column_letter(last_col)}{last_data}"
-    ws.freeze_panes = f"D{first_data}"
+    ws.freeze_panes = f"{get_column_letter(col_name + 1)}{first_data}"
     ws.page_setup.orientation = 'landscape'
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
@@ -1081,6 +1134,7 @@ def export():
         'hide_empty': request.form.get('hide_empty') == 'on',
         'export_mode': request.form.get('export_mode') if request.form.get('export_mode') in ('combined', 'feedback', 'rounds') else 'combined',
         'test_in_average': request.form.get('test_in_average') == 'on',
+        'temp_columns': request.form.get('temp_columns') == 'on',
         'uadc_setting': request.form.get('uadc', 'auto'),
     }
 
@@ -1110,7 +1164,7 @@ def export():
 
     return render_template('results.html', tab=tab, download_id=token_id,
                            role_colors=ROLE_COLORS, gray=GRAY, preview_rows=tab['rows'][:25],
-                           include_test=opts['include_test_score'], mode=opts['export_mode'], uadc=opts['uadc'])
+                           include_test=opts['include_test_score'], mode=opts['export_mode'], uadc=opts['uadc'], temp=opts['temp_columns'])
 
 
 @app.route('/download/<download_id>')
