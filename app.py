@@ -1,8 +1,10 @@
 """
 Tabbycat Adjudicator Tab Exporter v1.2
   * v1.2: two TEMPORARY columns, to the left of the Name column (delete them before the tab is released):
-        "Tested (by CAP)"   -> "Tested, Round 1" / "Tested, Rounds 2, 3": rounds in which a tester (adjudication core / CAP) gave
-                               the judge counted feedback (= the dark-outlined dots of Tabbycat's feedback graph)
+        "Tested (by CAP)"   -> "Tested, Round 1 by Aki, 2 by Jayvee": the CAP are the adjudicators marked "Member of the
+                               Adjudication Core" on the tab; every other judge who sat in the same debate as a CAP member
+                               (chair or panellist) in a round is "tested" in that round, by that CAP member (the
+                               dark-outlined dots of Tabbycat's feedback graph). Read from the draws (pairings).
         "Chair / Panelist"  -> "Chair, Rounds 2, 3" for judges who have chaired; "Panelist only, Rounds 2, 3" for judges who
                                have judged but never chaired; empty for judges who have not judged yet
 Tabbycat Adjudicator Tab Exporter v1.1
@@ -39,7 +41,7 @@ import os
 import io
 import re
 import uuid
-from collections import OrderedDict, defaultdict
+from collections import OrderedDict, defaultdict, Counter
 
 import requests
 from flask import (Flask, render_template, request, send_file, flash,
@@ -368,6 +370,7 @@ def fetch_raw(reader, opts):
 
     # Pairings: who was chair / panellist / trainee in which round
     roles = {}      # (round_seq, adjudicator_id) -> role
+    panels = []     # (round_seq, {adjudicator_id: role}) for every debate: who sat together
     debates = {}    # debate_id -> {'round': seq, 'trainees': set(adjudicator_id)}
     for rnd in rounds:
         pairing_url = (rnd.get('_links') or {}).get('pairing') or \
@@ -398,6 +401,16 @@ def fetch_raw(reader, opts):
             for adj_id in trainees:
                 if adj_id is not None:
                     roles[(rnd['seq'], adj_id)] = 'trainee'
+            members = {}
+            if chair is not None:
+                members[chair] = 'chair'
+            for adj_id in panellists:
+                if adj_id is not None:
+                    members[adj_id] = 'panellist'
+            for adj_id in trainees:
+                if adj_id is not None:
+                    members[adj_id] = 'trainee'
+            panels.append((rnd['seq'], members))
             if debate_id is not None:
                 debates[debate_id] = {'round': rnd['seq'],
                                       'trainees': {t for t in trainees if t is not None}}
@@ -411,6 +424,7 @@ def fetch_raw(reader, opts):
         'institutions': institutions,
         'roles': roles,
         'debates': debates,
+        'panels': panels,
         'feedback': feedback,
         'warnings': warnings,
     }
@@ -431,14 +445,15 @@ def compute_tab(raw, opts):
              'ignored': 0, 'trainee_source': 0, 'no_round': 0, 'no_score': 0,
              'outside_rounds': 0, 'unknown_role': 0}
 
-    # Testers: adjudication core (CAP) are always testers in Tabbycat; a separate "tester" flag is honoured if the API has one
-    tester_ids = set()
+    # CAP = the adjudicators the tab marks as "Member of the Adjudication Core" (API field adj_core)
+    cap = {}
     for a in raw['adjudicators']:
-        if isinstance(a, dict) and (a.get('adj_core') or a.get('tester') or a.get('is_tester')):
+        if isinstance(a, dict) and a.get('adj_core'):
             a_id = a.get('id') if a.get('id') is not None else url_id(a.get('url'), 'adjudicators')
             if a_id is not None:
-                tester_ids.add(a_id)
-    tested = set()                   # (adj_id, round_seq) the judge was tested in (counted feedback written by a tester)
+                cap[a_id] = (a.get('name') or '').strip()
+    words = Counter(n.split()[0].lower() for n in cap.values() if n)
+    cap_label = {i: (n.split()[0] if n and words[n.split()[0].lower()] == 1 else n) for i, n in cap.items()}
 
     scores = defaultdict(list)       # (adj_id, round_seq) -> [scores]
     for fb in raw['feedback']:
@@ -490,8 +505,6 @@ def compute_tab(raw, opts):
 
         scores[(adj_id, round_seq)].append(score)
         stats['feedback_used'] += 1
-        if src_adj is not None and src_adj in tester_ids:
-            tested.add((adj_id, round_seq))
 
     # Automatic round trimming: drop rounds that have no feedback at all
     if not opts.get('round_filter'):
@@ -501,8 +514,27 @@ def compute_tab(raw, opts):
     else:
         rounds = rounds_all
     round_seqs = [r['seq'] for r in rounds]
-    if not tester_ids:
-        warnings.append('No adjudicator is marked as adjudication core / tester, so the "Tested" column will stay empty.')
+    if not cap:
+        warnings.append('No adjudicator is marked "Member of the Adjudication Core" on the tab, so nobody can show as Tested.')
+
+    # Tested: in every round, each judge who sat in the same debate as a CAP member (chair or panellist) is tested by that member
+    tested_by = defaultdict(lambda: defaultdict(set))      # adj_id -> round_seq -> {CAP adjudicator ids}
+    for seq, members in raw.get('panels', []):
+        if seq not in round_seqs:
+            continue
+        caps_here = [m for m, role in members.items() if m in cap and role in ('chair', 'panellist')]
+        for m in members:
+            if m not in cap:
+                for c_id in caps_here:
+                    tested_by[m][seq].add(c_id)
+
+    def tested_text(adj_id):
+        by_round = tested_by.get(adj_id, {})
+        parts = []
+        for seq in sorted(by_round):
+            who = ' & '.join(cap_label[c_id] for c_id in sorted(by_round[seq], key=lambda i: cap_label[i].lower()))
+            parts.append(f"{'Round ' if not parts else ''}{round_label(seq)} by {who}")
+        return 'Tested, ' + ', '.join(parts) if parts else ''
 
     def round_label(seq):
         name = next((r.get('name') or '' for r in rounds_all if r['seq'] == seq), '')
@@ -573,7 +605,7 @@ def compute_tab(raw, opts):
             'drop_average': drop_average,
             'dropped': dropped,
             'rounds_judged': len(round_avgs),
-            'tested_note': rounds_text('Tested', [q for q in round_seqs if (adj_id, q) in tested]),
+            'tested_note': tested_text(adj_id),
             'chair_note': (rounds_text('Chair', [q for q in round_seqs if roles.get((q, adj_id)) == 'chair'])
                            or rounds_text('Panelist only', [q for q in round_seqs if roles.get((q, adj_id)) == 'panellist'])),
             'total_feedback': total_count,
@@ -623,6 +655,7 @@ def compute_tab(raw, opts):
 
     return {
         'tournament_name': raw['tournament_name'],
+        'cap': sorted(cap.values(), key=str.lower),
         'mode': opts.get('export_mode', 'combined'),
         'uadc': bool(opts.get('uadc')),
         'rounds': rounds,
