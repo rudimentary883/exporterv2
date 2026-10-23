@@ -88,7 +88,9 @@
             {{ tab.stats.trainee_source }} written by trainees, {{ tab.stats.outside_rounds }} outside the selected rounds.
         </p>
 
-        {% if tab.warnings %}
+        {% if temp %}<p style="font-size:12px;color:#666;">Adjudication core (CAP) identified from the tab: <strong>{{ tab.cap|length }}</strong>{% if tab.cap %} &mdash; {{ tab.cap|join(', ') }}{% endif %}. A judge is &ldquo;Tested&rdquo; in a round when sitting in the same debate as one of them.</p>{% endif %}
+
+                {% if tab.warnings %}
         <ul class="warn">
             {% for w in tab.warnings %}<li>{{ w }}</li>{% endfor %}
         </ul>
